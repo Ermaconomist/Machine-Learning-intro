@@ -1,5 +1,3 @@
-# Machine-Learning-intro
-
 Lucerne University of Applied Sciences and Arts
 
 Faculty:                      Business

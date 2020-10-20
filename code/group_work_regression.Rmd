@@ -1,0 +1,540 @@
+---
+title: 'Machine Learning I: Assessment (2/2)'
+author: 'Konstantinos Lessis, Maurice Willen, Nico Wyss, Sothy Yogarajah'
+class: 'FS 2020, 2. Semester @HSLU'
+date: "Document created on `r format(Sys.Date(), '%d.%m.%Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+# Initial Situation
+
+Due to the size of the project we decided to create two documents:
+
+- group_work_regression, bike sharing data set
+
+- group_work_classification, IBM telco data set
+
+
+-------------------------------------------------------------------------------
+**Regression models with the bike sharing data set**
+
+Part of this document are regression models. We decided to use the bike sharing 
+data set from the Laboratory of Artificial  Intelligence and Decision Support 
+(LIAAD), University of Porto for this purpose.
+
+Data Source: https://archive.ics.uci.edu/ml/datasets/bike+sharing+dataset 
+
+We are using EDA to find the most promising predictors and later on use them for
+our predictive modelling techniques to determine the number of hourly rented 
+bikes.
+
+Target variable: cnt
+
+The count variable tells us the number of rented bikes including casual and 
+registered by the hour. 
+
+Models in use and comparison: 
+
+- Linear Models
+
+- Decision Tree
+
+- Support Vector Machine 
+
+
+# Start Setup Options
+
+```{r library, message = FALSE}
+# clear workspace
+rm(list = ls(all.names = TRUE))
+# garbage collection
+gc()
+
+# penalty for exponential notation
+options(scipen = 999)
+# significant digits after komma
+options(digits = 4)
+
+# condition to check if packetmanager pacman is installed and install
+if ("pacman" %in% rownames(installed.packages()) == TRUE) {
+  library(pacman)
+} else {
+  install.packages("pacman")
+  library(pacman)
+}
+
+# load packages and install them if not installed
+p_load(tidyverse, tidymodels, janitor, here, corrr, skimr, ggthemes, broom, ipmisc)
+p_load(kernlab, rpart)
+p_load(rpart.plot, partykit)
+p_load(viridis)
+```
+
+# Importing Data
+
+```{r, message = FALSE}
+df_bike <- read_csv(here("data", "bikes.csv")) %>% clean_names()
+```
+
+
+# Exploratory Data Analysis
+
+## Summary Statistics
+
+```{r}
+skim(df_bike)
+```
+
+There are 17379 observations with 17 different variables.
+There are no NAs in the whole data set. 
+
+There are 17 variables:
+
+* instant: record index 
+* dteday : date 
+* season : season (1:winter, 2:spring, 3:summer, 4:fall) 
+* yr : year (0: 2011, 1:2012) 
+* mnth : month ( 1 to 12) 
+* hr : hour (0 to 23) 
+* holiday : weather day is holiday or not (extracted from [Web Link]) 
+* weekday : day of the week 
+* workingday : if day is neither weekend nor holiday is 1, otherwise is 0. 
+
+* weathersit : 
+* 1: Clear, Few clouds, Partly cloudy, Partly cloudy 
+* 2: Mist + Cloudy, Mist + Broken clouds, Mist + Few clouds, Mist 
+* 3: Light Snow, Light Rain + Thunderstorm + Scattered clouds, Light Rain + Scattered clouds 
+* 4: Heavy Rain + Ice Pallets + Thunderstorm + Mist, Snow + Fog 
+
+* temp : Normalized temperature in Celsius. The values are derived via (t-t_min)/(t_max-t_min), t_min=-8, t_max=+39 (only in hourly scale) 
+* atemp: Normalized feeling temperature in Celsius. The values are derived via (t-t_min)/(t_max-t_min), t_min=-16, t_max=+50 (only in hourly scale) 
+* hum: Normalized humidity. The values are divided to 100 (max) 
+* windspeed: Normalized wind speed. The values are divided to 67 (max) 
+* casual: count of casual users 
+* registered: count of registered users 
+
+## Correlation
+
+```{r message=FALSE, warning=FALSE}
+p_load(corrr, corrplot)
+
+df_bike %>% 
+  select_if(is.numeric) %>% 
+  correlate() %>% 
+  rplot(colors = c("red", "green")) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+- There is a visible positive correlation between count (total bikes rented in a day) and atemp(normalized feeling temperature), hr, temp.
+
+- The strong correlation between count and the 2 variables casual and registered can be explained by the fact that count = casual + registered.
+
+- There is a visible negative correlation between count and hum, weathersit
+
+
+# Modelling
+
+In the following chapter we will apply the regression models from the lectures.
+In order to do so following steps have to be taken beforehand:
+
+- Splitting the data into train and validation set
+- Omit unique values
+- log transformation
+- *Creating dummy variables in case testing set would have character variables*
+
+
+## Split Data into train & test
+
+```{r echo=TRUE}
+df_rg_split    <- df_bike %>% select(-instant, -dteday, -casual, -registered) %>% initial_split(prop = 0.80)
+df_rg_training <- df_rg_split %>% training()
+df_rg_testing  <- df_rg_split %>% testing()
+```
+
+- the data frame includes unsuitable variables for the regression modeling
+- after exclusion of those variables, a first 80/20 split is made
+- now the data frame df_rg_training includes 80% of the original bikes data frame 
+
+
+## Data Preparation & Preproccessing
+
+Instead of using the Data Preparation & Preproccessing steps that we have seen in the lecture
+we are using the tidymodels framework that allows us to create a recipe which we can than reuse for the different models.
+
+
+## Recipe
+
+Create Recipe
+
+- for the following regression models, we need to prepare our recipe
+- furthermore our target variable is being logarithmized for a better approximation of greater gaps 
+
+```{r echo=TRUE}
+# 04. write recipe to preprocess data ----
+recipe_reg <- recipe(cnt ~ ., data = df_rg_training) %>% 
+  step_log(cnt) %>% 
+  step_dummy (all_nominal(), -cnt)
+```
+
+## Bootstrap
+
+```{r}
+df_bs_training <- df_rg_training %>% bootstraps(times = 5)
+
+# extract analysis and assessement dataset
+df_bs_training_unnest <- df_bs_training %>%
+  mutate(df_analysis  = map(splits, analysis),
+         df_assesment = map(splits, assessment))
+```
+
+The training data set is bootstraped into 5 equally distributed pieces.
+
+## Model Training
+
+The models are trained on the bootstraped datasets with the analysis-data.
+For every split iteration 4/5 are used to create the model and 1/5 to test the model.
+This ensures that we do not miss any crucial part of the data in order to construct the model.
+
+
+## Measure of fit
+
+As a measure of fit when evaluating the data we are using three metrics:
+
+* RMSE (Root Mean Square Error)
+* RSQ (R Squared)
+* MAE (Mean Absolute Error)
+
+**Mean Absolute Percentage Error**
+$$M = \frac{1}{n}\sum_{t = 1}^{n}|\frac{A_{t} -F_{t}}{A_{t}}$$
+
+where At is the actual value and Ft is the forecast value. The MAPE is also sometimes reported as a percentage, which is the above equation multiplied by 100. The difference between At and Ft is divided by the actual value At again. The absolute value in this calculation is summed for every forecasted point in time and divided by the number of fitted points n. Multiplying by 100% makes it a percentage error.
+
+
+
+**root-mean-square error (RMSE)**
+$$RMSD = \sqrt{\frac{\sum_{t = 1}^{T}(\hat{y_t}-y)^2}{T}}  $$
+The RMSD of predicted values $\hat{y_t}$ for times $t$ of a regression's dependent variable $y$
+with variables observed over $T$ times, is computed for T different predictions as the square root of the mean of the squares of the deviations.
+
+
+**Mean absolute error**
+$$MAE = \frac{\sum_{i = 1}^{n}|y_i - x_i|}{n}$$
+
+## Linear Models
+
+in the following chapter we train and evaluate linears models.
+the aim is to correctly predict the variable cnt on the assessment dataset.
+
+
+### Train and Predict
+
+```{r}
+model_lm <- linear_reg(mode = "regression") %>% 
+  set_engine("lm")
+
+lm_fit <- df_bs_training_unnest %>% 
+  # preprocess dataset
+  mutate(recipe       = map(df_analysis, ~ prep(recipe_reg, training = .x)),
+         df_analysis  = map2(recipe, df_analysis,  ~ bake(.x, new_data = .y)),
+         df_assesment = map2(recipe, df_assesment, ~ bake(.x, new_data = .y))) %>%
+  # fit model
+  mutate(model_fit    = map(df_analysis, ~ fit(model_lm, cnt ~ ., data = .x))) %>%
+# predict
+  mutate(model_pred   = map2(model_fit, df_assesment, ~ predict(.x, new_data = .y)))
+```
+
+
+### Evaluation & Regression Metrics
+```{r}
+df_lm <- lm_fit %>% select(id, df_assesment, model_pred) %>% 
+  mutate(df_compare = map2(df_assesment, 
+                           model_pred, ~ tibble(cnt = .x$cnt,
+                                                pred  = .y$.pred))) %>% 
+  select(id, df_compare) %>% 
+  unnest(df_compare) %>% 
+  group_by(id)
+
+df_lm %>% 
+  metrics(truth = cnt, estimate = pred) %>% 
+  select(id, .metric, .estimate) %>% 
+  pivot_wider(names_from = id, values_from = .estimate)
+```
+
+```{r}
+multi_metric <- metric_set(rmse, mae, rsq)
+
+df_lm %>% 
+  multi_metric(truth = cnt, estimate = pred) %>% 
+  ggplot() +
+    geom_point(aes(x = id, y = .estimate, color = .metric)) + 
+    facet_wrap(.metric ~ ., scales = "free", ncol = 3) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8)) +
+    theme(legend.position = "None")
+```
+- For each of the three metrics, there is no mentionable discrepancy within the bootstraps
+- We can assume there are no hidden features, since the above mentioned differences do not vary
+- the models seem to be robust
+
+
+### Variable Importance & P-Value
+
+```{r fig.height=6, fig.width=10, cols.print=, rows.print=50}
+recipe_prep <- prep(recipe_reg, training = df_rg_training)
+df_rg_training_pp <- bake(recipe_prep, new_data = df_rg_training)
+
+model_lm %>%
+  fit(cnt ~ . , data = df_rg_training_pp) %>%
+  tidy(conf.int = TRUE) %>%
+  mutate(p_value = round(p.value, digits = 5)) %>% 
+  select(-p.value) %>% 
+  signif_column(p = p_value)
+```
+
+```{r}
+model_lm %>%
+  fit(cnt ~ . , data = df_rg_training_pp) %>%
+  tidy(conf.int = TRUE) %>%
+  mutate(p_value = round(p.value, digits = 5)) %>% 
+  select(-p.value) %>% 
+  signif_column(p = p_value) %>% 
+  ggplot() +
+    geom_point(aes(x = estimate, y = term, color = term)) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high, y = term, color = term)) +
+    geom_vline(xintercept = 0) +
+    theme(legend.position = "none") +
+  facet_wrap(. ~significance, scales = "free") +
+  theme_pander()
+```
+- In combination of all variables, the weather (weathersit), temperatur (temp) and the month (mnth) are not significant as a predictor
+- We guess that there are interactions with temperatur and other variables since the temp ist highly significant as a stand-alone variable (simple LM model)
+- The humidity is the only factor with a negative impact
+
+## Decision Tree - Regression
+
+ - In the following chapter we train and evaluate a decision tree model
+ - The aim is to correctly predict the variable cnt on the assessment data set
+
+### Train and Predict
+
+```{r}
+model_dt <- decision_tree(mode = "regression", tree_depth = 5, cost_complexity = 0.1) %>% 
+  set_engine("rpart")
+
+dt_fit <- df_bs_training_unnest %>% 
+  # preprocess dataset
+  mutate(recipe       = map(df_analysis, ~ prep(recipe_reg, training = .x)),
+         df_analysis  = map2(recipe, df_analysis,  ~ bake(.x, new_data = .y)),
+         df_assesment = map2(recipe, df_assesment, ~ bake(.x, new_data = .y))) %>%
+  # fit model
+  mutate(model_fit    = map(df_analysis, ~ fit(model_dt, cnt ~ ., data = .x))) %>%
+# predict
+  mutate(model_pred   = map2(model_fit, df_assesment, ~ predict(.x, new_data = .y)))
+```
+
+### Evaluation & Regression Metrics
+
+
+```{r}
+df_dt <- dt_fit %>% select(id, df_assesment, model_pred) %>% 
+  mutate(df_compare = map2(df_assesment, 
+                           model_pred, ~ tibble(cnt = .x$cnt,
+                                                pred  = .y$.pred))) %>% 
+  select(id, df_compare) %>% 
+  unnest(df_compare) %>% 
+  group_by(id)
+
+df_dt %>% 
+  metrics(truth = cnt, estimate = pred) %>% 
+  select(id, .metric, .estimate) %>% 
+  pivot_wider(names_from = id, values_from = .estimate)
+```
+
+```{r}
+multi_metric <- metric_set(rmse, mae, rsq)
+
+df_dt %>%  
+  multi_metric(truth = cnt, estimate = pred) %>% 
+  ggplot() +
+    geom_point(aes(x = id, y = .estimate, color = .metric)) + 
+    facet_wrap(.metric ~ ., scales = "free", ncol = 3) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8)) +
+    theme(legend.position = "None")
+```
+
+
+- For each of the three metrics, there is no mentionable discrepancy within the bootstraps
+- Similar to the linear regression metric analysis, we assume that there are no hidden features, since the above mentioned differences do not vary
+- all models seem to be robust
+
+
+### Variable Importance & P-Value
+
+
+
+```{r fig.height=6, fig.width=10, cols.print=, rows.print=50}
+recipe_prep <- prep(recipe_reg, training = df_rg_training)
+df_rg_training_pp <- bake(recipe_prep, new_data = df_rg_training)
+
+rp_tree <- rpart(cnt ~ ., data = df_rg_training_pp)
+
+rpart.plot(rp_tree)
+```
+
+
+
+```{r fig.height=10, fig.width=10}
+plot(as.party(rp_tree))
+```
+
+- to determine the variable importance, we see that over 70% is influenced by Temperature
+- the first split occurs to be hour, whereas the variable is seen over the whole tree (which makes sense, since you rent a bike mostly in the morning or midday but not in the evening)
+
+
+## Support Vector Machine - Regression
+
+ - in the following chapter we train and evaluate support vector machine model
+ - the aim is to correctly predict the variable cnt on the assessment data set
+
+### Train and Predict
+
+```{r}
+model_svm <- svm_rbf(mode = "regression") %>% 
+  set_engine("kernlab")
+
+svm_fit <- df_bs_training_unnest %>% 
+  # preprocess dataset
+  mutate(recipe       = map(df_analysis, ~ prep(recipe_reg, training = .x)),
+         df_analysis  = map2(recipe, df_analysis,  ~ bake(.x, new_data = .y)),
+         df_assesment = map2(recipe, df_assesment, ~ bake(.x, new_data = .y))) %>%
+  # fit model
+  mutate(model_fit    = map(df_analysis, ~ fit(model_svm, cnt ~ ., data = .x))) %>%
+# predict
+  mutate(model_pred   = map2(model_fit, df_assesment, ~ predict(.x, new_data = .y)))
+```
+
+
+### Evaluation & Regression Metrics
+
+```{r}
+df_svm <- svm_fit %>% select(id, df_assesment, model_pred) %>% 
+  mutate(df_compare = map2(df_assesment, 
+                           model_pred, ~ tibble(cnt = .x$cnt,
+                                                pred  = .y$.pred))) %>% 
+  select(id, df_compare) %>% 
+  unnest(df_compare) %>% 
+  group_by(id)
+
+df_svm %>% 
+  metrics(truth = cnt, estimate = pred) %>% 
+  select(id, .metric, .estimate) %>% 
+  pivot_wider(names_from = id, values_from = .estimate)
+
+```
+
+```{r}
+multi_metric <- metric_set(rmse, mae, rsq)
+
+df_svm %>%  
+  multi_metric(truth = cnt, estimate = pred) %>% 
+  ggplot() +
+    geom_point(aes(x = id, y = .estimate, color = .metric)) + 
+    facet_wrap(.metric ~ ., scales = "free", ncol = 3) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8)) +
+    theme(legend.position = "None")
+```
+
+- For each of the three metrics, there is no mentionable discrepancy within the bootstraps
+- Similar to the linear regression metric analysis and the regression tree analysis, we assume that there are no hidden features, since the above mentioned metrics do not vary too much
+- the models seem to be robust
+
+
+
+```{r fig.height=6, fig.width=10, cols.print=, rows.print=50}
+
+recipe_prep <- prep(recipe_reg, training = df_rg_training)
+df_rg_training_pp <- bake(recipe_prep, new_data = df_rg_training)
+
+df_z <- model_svm %>%
+  fit(cnt ~ . , data = df_rg_training_pp) 
+```
+
+## Model Comparison
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+recipe_reg <- recipe(cnt ~ ., data = df_rg_training) %>% 
+  step_log(cnt) %>% 
+  step_dummy (all_nominal(), -cnt) %>% 
+  prep()
+
+recipe_reg
+recipe_reg %>% summary
+
+df_rg_train_pp <- bake(recipe_reg, new_data = df_rg_training)
+df_rg_test_pp  <- bake(recipe_reg, new_data = df_rg_testing)
+
+fit_lm  <- model_lm  %>% fit(cnt ~ ., data = df_rg_train_pp)
+fit_dt  <- model_dt  %>% fit(cnt ~ ., data = df_rg_train_pp)
+fit_svm <- model_svm %>% fit(cnt ~ ., data = df_rg_train_pp)
+
+df_rg_predict <- df_rg_test_pp %>% 
+  mutate("LM_" = fit_lm  %>% predict(new_data = df_rg_test_pp) %>% pull,
+         "DT_" = fit_dt  %>% predict(new_data = df_rg_test_pp) %>% pull,
+         "SVM" = fit_svm %>% predict(new_data = df_rg_test_pp) %>% pull)
+
+
+```
+
+```{r fig.height=7, fig.width=10}
+df_eval <-  df_rg_predict %>% metrics(truth = cnt, estimate = LM_) %>% mutate(model = "LM_")  %>% 
+  bind_rows(df_rg_predict %>% metrics(truth = cnt, estimate = DT_) %>% mutate(model = "DT_")) %>% 
+  bind_rows(df_rg_predict %>% metrics(truth = cnt, estimate = SVM) %>% mutate(model = "SVM"))
+
+df_eval %>% 
+  select(-.estimator) %>% 
+  pivot_wider(names_from = model, values_from = .estimate)
+
+
+```
+
+```{r fig.height=5, fig.width=7}
+vec_metrics <- c("rmse", "rsq", "mae")
+
+df_eval %>% 
+  filter(.metric %in% vec_metrics) %>% 
+  ggplot() +
+  geom_point(aes(x = .metric, y = .estimate, col = model)) +
+  facet_wrap(.metric ~ ., scales = "free", ncol = 3) + 
+  theme(strip.background = element_blank(), strip.text.x = element_blank()) +
+  geom_label(aes(x = .metric, y = .estimate, label = model), nudge_x = 0.3, size = 2.5 ) +
+  theme_classic() +
+  theme(legend.position = "None")
+```
+* As we can see, LM performs best in terms of mae and rmse. 
+* Random Forest performed the worst; We expect the model to perform better with lesser pruning steps
+* Model results are not clear over all three metrics. There is no "winner".
+
+
+
+
+
+
+
+# Conclusion
+
+- With the given data set, we were able to build regression models
+- All of the models achieved high accuracy scores
+- Our models could be used to effectively predict the hourly demand for rental bikes on a specific week within a specific month of the year
+
+# Session Info
+```{r}
+sessionInfo()
+```

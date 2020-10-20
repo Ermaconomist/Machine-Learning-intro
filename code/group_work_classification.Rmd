@@ -1,0 +1,918 @@
+---
+title: 'Machine Learning I: Assessment (1/2)'
+author: 'Konstantinos Lessis, Maurice Willen, Nico Wyss, Sothy Yogarajah'
+class: 'FS 2020, 2. Semester @HSLU'
+date: "Document created on `r format(Sys.Date(), '%d.%m.%Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+# Initial Situation
+
+Due to the size of the project we decided to create two documents:
+
+ * group_work_classification, IBM telco data set
+ * group_work_regression, bike sharing data set
+
+-------------------------------------------------------------------------------
+
+**Classification models with the IBM telco data set**
+
+Part of this document are the classification models. We decided to use the IBM
+telco customer churn analysis data set from Github for for this purpose.
+
+Data Source: https://github.com/IBM/telco-customer-churn-on-icp4d
+
+We are using EDA to find the most promising predictors and later on use them for
+our predictive modelling techniques to determine if customers are most likely to
+churn. 
+
+Target variable: churn
+
+the customer churn column tells us if the customer has left within the last 
+month.
+
+Models in use and comparison: 
+* Support Vector Machine
+* Random Forest
+* Logistic Regression
+* Artificial Neural Networks
+
+
+# Start Setup Options
+
+```{r library, message = FALSE}
+# clear workspace
+rm(list = ls(all.names = TRUE))
+# garbage collection
+gc()
+
+# penalty for exponential notation
+options(scipen = 999)
+# significant digits after komma
+options(digits = 4)
+
+# condition to check if packetmanager pacman is installed and install
+if ("pacman" %in% rownames(installed.packages()) == TRUE) {
+  library(pacman)
+} else {
+  install.packages("pacman")
+  library(pacman)
+}
+
+# load packages and install them if not installed
+p_load(tidyverse, tidymodels, janitor, here, corrr, skimr, ggthemes)
+p_load(kernlab, randomForest)
+p_load(viridis)
+```
+
+Package Discription:
+
+Package       | Description
+--- | -------------
+**Tidyverse**     | The tidyverse is an opinionated collection of R packages designed for data science. All packages share an underlying design philosophy, grammar, and data structures.
+**Tidymodels**    | The tidymodels framework is a collection of packages for modeling and machine learning using tidyverse principles.
+**janitor**       | This function is powered by the underlying exported function make_clean_names(), which accepts and returns a character vector of names. This allows for cleaning the names (head of columns) of any object. 
+**corrr**         | A tool for exploring correlations. It makes it possible to easily perform routine tasks when exploring correlation matrices such as ignoring the diagonal, focusing on the correlations of certain variables against others, or rearranging and visualizing the matrix in terms of the strength of the correlations.
+**skimr**         | A simple to use summary function that can be used with pipes and displays nicely in the console. The default summary statistics may be modified by the user as can the default formatting. Support for data frames and vectors is included, and users can implement their own skim methods for specific object types as described in a vignette. Default summaries include support for inline spark graphs.
+**ggthemes**      | Some extra themes, geoms, and scales for 'ggplot2'. Provides 'ggplot2' themes and scales that replicate the look of plots by Edward Tufte, Stephen Few, 'Fivethirtyeight', 'Tableau', 'The Economist', 'Stata', 'Excel', and 'The Wall Street Journal', among others. Provides 'geoms' for Tufte's box plot and range frame.
+
+
+<!-- - Tidyverse: The tidyverse is an opinionated collection of R packages designed for data science. All packages share an underlying design philosophy, grammar, and data structures. -->
+
+<!-- - Tidymodels: The tidymodels framework is a collection of packages for modeling and machine learning using tidyverse principles. -->
+
+<!-- - janitor: This function is powered by the underlying exported function make_clean_names(), which accepts and returns a character vector of names. This allows for cleaning the names (head of columns) of any object.  -->
+
+<!-- - here: Constructs paths to your project's files. The 'here()' function uses a reasonable heuristics to find your project's files, based on the current working directory at the time when the package is loaded. Use it as a drop-in replacement for 'file.path()', it will always locate the files relative to your project root. -->
+
+<!-- - kknn: Performs k-nearest neighbor classification of a test set using a training set. For each row of the test set, the k nearest training set vectors (according to Minkowski distance) are found, and the classification is done via the maximum of summed kernel densities. In addition even ordinal and continuous variables can be predicted. -->
+
+<!-- - corrr: A tool for exploring correlations. It makes it possible to easily perform routine tasks when exploring correlation matrices such as ignoring the diagonal, focusing on the correlations of certain variables against others, or rearranging and visualizing the matrix in terms of the strength of the correlations. -->
+
+<!-- - skimr: A simple to use summary function that can be used with pipes and displays nicely in the console. The default summary statistics may be modified by the user as can the default formatting. Support for data frames and vectors is included, and users can implement their own skim methods for specific object types as described in a vignette. Default summaries include support for inline spark graphs. -->
+
+<!-- - ggthemes: Some extra themes, geoms, and scales for 'ggplot2'. Provides 'ggplot2' themes and scales that replicate the look of plots by Edward Tufte, Stephen Few, 'Fivethirtyeight', 'The Economist', 'Stata', 'Excel', and 'The Wall Street Journal', among others. Provides 'geoms' for Tufte's box plot and range frame. -->
+
+
+# Importing Data
+
+```{r, message = FALSE}
+df_ibm <- read_csv(here("data", "ibm.csv"))
+```
+
+
+# Exploratory Data Analysis
+
+## Summary Statistics
+
+```{r warning=FALSE}
+skim(df_ibm)
+```
+
+There are 7043 observations with 21 different variables.
+There are only 11 NAs in the whole data set. That's only 0.16% of the total 
+number of observations.
+
+There are 3 continuous variables:
+* Tenure
+* Monthly Charges
+* Total Charges
+
+And one wrongly formatted variable:
+* Senior Citizen (formatted as integer)
+
+
+## Data Cleansing
+
+```{r echo=TRUE}
+df_ibm <- df_ibm %>% 
+  clean_names(case = "snake") %>% 
+  mutate(senior_citizen = ifelse(senior_citizen == 1, "Yes", "No"))
+
+df_ibm %>% skim()
+```
+
+We are type correcting Senior Citizen and unifying column names to snake case.
+
+
+## Categorical Variables
+
+### Gender, Senior Citizen, Partner
+
+```{r fig.height=4, fig.width=7, warning=FALSE}
+# vector with the name of nominal variables to plot
+vec_variable <- c("gender", "senior_citizen", "partner")
+
+df_ibm %>% 
+  select(churn, one_of(vec_variable)) %>% 
+  select_if(is.character) %>% 
+  pivot_longer(names_to  = "VARIABLES",
+               values_to = "VALUES",
+               cols      =  one_of(vec_variable)) %>% 
+  count(churn, VARIABLES, VALUES) %>% 
+  ggplot() +
+  geom_bar(position = position_stack(reverse = TRUE),
+           stat = "identity",
+           aes(x = VALUES, y = n, fill = churn, color = churn), alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "top") +
+  facet_wrap(~ VARIABLES, ncol = 4, scales = "free") +
+  scale_color_tableau() +
+  scale_fill_tableau() +
+  scale_x_discrete() +
+  geom_label(aes(x = VALUES, y = n, label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3)
+
+rm(vec_variable)
+```
+
+* Gender: churn is almost equal in case of males and females. Gender might not
+be a determining factor
+* Partner: customer with partner has lower churn rate, since two people might be 
+affected from the changes, you'll endure higher bill rate longer.
+* Senior Citizen: churn is higher if it is a senior citizen
+
+
+### Phone Service, Multiple Lines, Internet Service
+
+```{r fig.height=5, fig.width=7, warning=FALSE}
+# vector with the name of nominal variables to plot
+vec_variable <- c("phone_service", "multiple_lines", "internet_service")
+
+df_ibm %>% 
+  select(churn, one_of(vec_variable)) %>% 
+  select_if(is.character) %>% 
+  pivot_longer(names_to  = "VARIABLES",
+               values_to = "VALUES",
+               cols      =  one_of(vec_variable)) %>% 
+  count(churn, VARIABLES, VALUES) %>% 
+  ggplot() +
+  geom_bar(position = position_stack(reverse = TRUE),
+           stat = "identity",
+           aes(x = VALUES, y = n, fill = churn, color = churn), alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top") +
+  facet_wrap(~ VARIABLES, ncol = 4, scales = "free") +
+  scale_color_tableau() +
+  scale_fill_tableau() +
+  scale_x_discrete() +
+  geom_label(aes(x = VALUES, y = n, label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3)
+
+rm(vec_variable)
+```
+
+* Phone Service: churn around the same
+* Multiple Lines: churn is slightly higher if multiple lines are used
+* Internet Service: Churn rate is much higher in case of fiber optic (lower switching costs?)
+
+
+### Online Security, Online Backup, Tech Support
+
+```{r fig.height=5, fig.width=7, warning=FALSE}
+# vector with the name of nominal variables to plot
+vec_variable <- c("online_security", "online_backup", "tech_support")
+
+df_ibm %>% 
+  select(churn, one_of(vec_variable)) %>% 
+  select_if(is.character) %>% 
+  pivot_longer(names_to  = "VARIABLES",
+               values_to = "VALUES",
+               cols      =  one_of(vec_variable)) %>% 
+  count(churn, VARIABLES, VALUES) %>% 
+  ggplot() +
+  geom_bar(position = position_stack(reverse = TRUE),
+           stat = "identity",
+           aes(x = VALUES, y = n, fill = churn, color = churn), alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top") +
+  facet_wrap(~ VARIABLES, ncol = 4, scales = "free") +
+  scale_color_tableau() +
+  scale_fill_tableau() +
+  scale_x_discrete() +
+  geom_label(aes(x = VALUES, y = n, label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3)
+
+rm(vec_variable)
+```
+
+* Online Security: Customer without are with higher churn rate
+* Online Backup: Customer without are with higher churn rate
+* Tech Support: Customer without are with higher churn rate
+
+
+### Streaming Movies, Streaming TV, Contract
+
+```{r fig.height=5, fig.width=7, warning=FALSE}
+# vector with the name of nominal variables to plot
+vec_variable <- c("streaming_movies", "streaming_tv", "contract")
+
+df_ibm %>% 
+  select(churn, one_of(vec_variable)) %>% 
+  select_if(is.character) %>% 
+  pivot_longer(names_to  = "VARIABLES",
+               values_to = "VALUES",
+               cols      =  one_of(vec_variable)) %>% 
+  count(churn, VARIABLES, VALUES) %>% 
+  ggplot() +
+  geom_bar(position = position_stack(reverse = TRUE),
+           stat = "identity",
+           aes(x = VALUES, y = n, fill = churn, color = churn), alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top") +
+  facet_wrap(~ VARIABLES, ncol = 4, scales = "free") +
+  scale_color_tableau() +
+  scale_fill_tableau() +
+  scale_x_discrete() +
+  geom_label(aes(x = VALUES, y = n, label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3)
+
+rm(vec_variable)
+```
+
+* Contract: Higher churn rate with month-to-month payment
+* Streaming Movies: churn rate is lowest if no internet service
+* Streaming TV: churn rate is lowest if no internet service
+
+
+### Device Protection, Paperless Billing, Payment Method
+
+```{r fig.height=5, fig.width=7, warning=FALSE}
+# vector with the name of nominal variables to plot
+vec_variable <- c("device_protection", "paperless_billing", "payment_method")
+
+df_ibm %>% 
+  select(churn, one_of(vec_variable)) %>% 
+  select_if(is.character) %>% 
+  pivot_longer(names_to  = "VARIABLES",
+               values_to = "VALUES",
+               cols      =  one_of(vec_variable)) %>% 
+  count(churn, VARIABLES, VALUES) %>% 
+  ggplot() +
+  geom_bar(position = position_stack(reverse = TRUE),
+           stat = "identity",
+           aes(x = VALUES, y = n, fill = churn, color = churn), alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top") +
+  facet_wrap(~ VARIABLES, ncol = 4, scales = "free") +
+  scale_color_tableau() +
+  scale_fill_tableau() +
+  scale_x_discrete() +
+  geom_label(aes(x = VALUES, y = n, label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3)
+
+rm(vec_variable)
+```
+
+* Device Protection: Higher churn rate if no device protection
+* Paperless Billing: Higher churn rate if paperless billing
+* Payment Method: Highest churn rate with electronic check
+
+
+### Dependents
+
+```{r fig.height=5, fig.width=2.5, warning=FALSE}
+# vector with the name of nominal variables to plot
+vec_variable <- c("dependents")
+
+df_ibm %>% 
+  select(churn, one_of(vec_variable)) %>% 
+  select_if(is.character) %>% 
+  pivot_longer(names_to  = "VARIABLES",
+               values_to = "VALUES",
+               cols      =  one_of(vec_variable)) %>% 
+  count(churn, VARIABLES, VALUES) %>% 
+  ggplot() +
+  geom_bar(position = position_stack(reverse = TRUE),
+           stat = "identity",
+           aes(x = VALUES, y = n, fill = churn, color = churn), alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top") +
+  facet_wrap(~ VARIABLES, ncol = 4, scales = "free") +
+  scale_color_tableau() +
+  scale_fill_tableau() +
+  scale_x_discrete() +
+  geom_label(aes(x = VALUES, y = n, label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3)
+
+rm(vec_variable)
+```
+
+* Dependents: customer with dependents have lower churn rate
+
+
+## Continuous Variables
+
+### Distributions
+
+Distributions of continious variables:
+* Monthly charges
+* Total charges
+* Tenure
+
+```{r echo=TRUE, fig.height=7, fig.width=4, warning=FALSE}
+df_ibm %>% 
+  drop_na %>% 
+  select(churn, monthly_charges, total_charges, tenure) %>% 
+  pivot_longer(names_to  = "VARIABLES",
+               values_to = "VALUES",
+               cols      = 2:4) %>% 
+  ggplot() +
+  geom_density(aes(x = VALUES, fill = churn, color = churn), alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top") +
+  facet_wrap( ~ VARIABLES, nrow = 3, scales = "free") +
+  scale_color_viridis(discrete = TRUE) +
+  scale_fill_viridis(discrete = TRUE) +
+  scale_x_continuous()
+```
+
+* Monthly Charges: A lot of current customers with less than 25$ monthly charges. For the rest, the distribution is similar.
+* Total Charges: The distribution of total charges is right skewed no matter 
+whether they churned or not. 
+* Tenure: Right skewed distribution for customers which have churned. Most loyal
+customers are either under 12 months or over 60 months. 
+
+Important: We have to log-transform the right skewed variables. 
+
+### Total Charges
+```{r fig.height=5, fig.width=4, warning=FALSE}
+df_ibm %>% 
+  drop_na() %>% 
+  ggplot() +
+  geom_boxplot(aes(y = total_charges, x = "", fill = churn)) + 
+  theme_wsj() + xlab("") +
+  theme(axis.title = element_text (size = 12)) 
+```
+
+* the median of total charges of customers who have churned is low. 
+* several outliers can be found on the upper end of churned clients with high total charges
+
+### Monthly Charges
+```{r fig.height=5, fig.width=4, warning=FALSE}
+df_ibm %>% 
+  drop_na() %>% 
+  ggplot() +
+  geom_boxplot(aes(y = monthly_charges, x = "", fill = churn)) + 
+  theme_wsj() + xlab("") +
+  theme(axis.title = element_text (size = 12)) 
+```
+
+* Customers who have churned, have high monthly charges above 75$. 
+
+### Tenure
+```{r fig.height=5, fig.width=4, warning=FALSE}
+df_ibm %>% 
+  drop_na() %>% 
+  ggplot() +
+  geom_boxplot(aes(y = tenure, x = "", fill = churn)) + 
+  theme_wsj() + xlab("") +
+  theme(axis.title = element_text (size = 12)) 
+```
+
+* Median Tenure for customer who have left is around 10 months.
+* 50% of the churns occur between 3 and 30 months of tenure
+
+
+## Correlation
+
+Checking the correlation between continuous variables
+
+```{r message=FALSE, warning=FALSE}
+df_ibm %>%  
+  select_if(is.numeric) %>% 
+  drop_na() %>% 
+  correlate() 
+```
+
+```{r fig.height=5, fig.width=6, message=FALSE, warning=FALSE}
+df_ibm %>%  
+  select_if(is.numeric) %>% 
+  drop_na() %>% 
+  correlate() %>% 
+  rplot() + 
+  theme_wsj()
+```
+
+Total Charges has a positive correlation with tenure (which makes sense) and monthly charges.
+
+
+# Modelling
+
+In the following chapter we will apply the classification models from the lecture.
+In order to do so following steps have to be taken beforehand:
+* Splitting the data into train and validation set
+* Omit Unique Values (Customer ID)
+* Drop NAs
+* log transformation
+* Creating dummy variables
+* center & scale data --> normalize
+
+
+## Split data into train & test
+
+```{r include=FALSE}
+# 03. partition data ----
+df_01_split    <- df_ibm %>% select(-customer_id) %>% initial_split(prop = 0.80)
+df_01_training <- df_01_split %>% training()
+df_01_testing  <- df_01_split %>% testing()
+
+```
+
+1. The data frame includes unsuitable variables for the classification modeling
+2. After exclusion of those variables, a first 80/20 split is made
+3. Now the data frame df_01_training includes 80% of the original ibm data frame 
+
+## Data Preparation & Preproccessing
+
+Instead of using the Data Preparation & Preproccessing steps that we have seen in the lectures
+we are using the tidymodels framework that allows us to create a recipe which we can reuse
+for different models.
+
+
+## Recipe
+
+Create Recipe
+
+* for the following classification models, we need to prepare our recipe
+* hence, we omit all NA Values (we saw, just around 3% of the data set is effected)
+* furthermore, continuous variables are being logarithmized for a better approximation of greater gaps
+* the dataset includes mostly categorical variables (Yes/No), the step dummy one-hot encodes these to ones and zeros
+* as we will see later, the models converge faster if the data is normalized and centered 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# 04. write recipe to preprocess data ----
+obj_02_recipe <- recipe(churn ~ ., data = df_01_training) %>% 
+  step_naomit(all_predictors()) %>% 
+  step_log(total_charges) %>% 
+  step_log(monthly_charges) %>% 
+  step_dummy (all_nominal(),    -all_outcomes()) %>%
+  step_center(all_predictors(), -all_outcomes()) %>%
+  step_scale (all_predictors(), -all_outcomes()) 
+```
+
+
+## Cross-Validation
+
+```{r}
+df_cv_training <- df_01_training %>% vfold_cv(v = 5)
+df_cv_training[[1]]
+
+# extract analysis and assessement dataset
+df_cv_training_unnest <- df_cv_training %>%
+  mutate(df_analysis  = map(splits, analysis),
+         df_assesment = map(splits, assessment))
+```
+* cross validation was achieved with a five-fold cross validation
+* for the following step, we change the split portions to its respective naming convention (training=analysis, assesment = testing)
+* create cross-validation datasets into analysis & assessment datasets
+
+## Model Training
+
+The model is trained on the crossvalided dataset, in our case with the analysis-data for 5 times.
+For every split iteration 4/5 are used to create the model and 1/5 to assess the model performancel.
+This ensures that we do not miss any crucial part of the data in order to construct the model.
+
+## Measure of fit
+
+As a measure of fit when evaluating the data we are using two metrics:
+
+* Accuracy: As our goal is to predict a binary variable we use the accuracy metric. It shows the percentage of 
+ correctly classified instances out of all instances.
+
+ Accuracy = $\frac{Number of Correct Predictions}{Total  Pedictions}$
+
+* Cohen's Kappa: It measures the agreement between two raters and takes into account agreement occuring by chance.
+
+Cohen's Kappa = $\frac{p_{o}-p_{e}}{1-p_{e}}$
+
+$p_{o}$ is the relative observed agreement among raters |
+$p_{e}$ is the hypothetical probability of chance agreement
+
+
+## Support Vector Machine
+
+in the following chapter we train and evaluate support vector machine model
+the aim is to correctly classify the variable churn on the assessment data set
+
+Classification SVM (radial)
+
+
+### Train and Predict
+```{r}
+# adjust model settings and engine parameters
+model_svm <- svm_rbf(mode = "classification") %>% 
+  set_engine("kernlab")
+
+svm_fit <- df_cv_training_unnest %>% 
+  # preprocess dataset
+  mutate(recipe       = map(df_analysis, ~ prep(obj_02_recipe, training = .x)),
+         df_analysis  = map(recipe, juice),
+         df_assesment = map2(recipe, df_assesment, ~ bake(.x, new_data = .y))) %>%
+  # fit model
+  mutate(model_fit    = map(df_analysis, ~ fit(model_svm, churn ~ ., data = .x))) %>%
+  # predict
+  mutate(model_pred   = map2(model_fit, df_assesment, ~ predict(.x, new_data = .y)))
+
+```
+
+
+### Evaluation
+
+* in the following chapter we evaluate the performance of the support vector machine model
+* the aim is to correctly classify the variable churn on the assessment data set
+
+```{r rows.print = 50}
+df_svm <- svm_fit %>% select(id, df_assesment, model_pred) %>% 
+  mutate(df_compare = map2(df_assesment, 
+                        model_pred, ~ tibble(churn = .x$churn,
+                                             pred  = .y$.pred_class))) %>% 
+  select(id, df_compare) %>% 
+  unnest(df_compare) %>% 
+  group_by(id)
+
+df_svm %>% 
+  group_by(id) %>% 
+  conf_mat(truth = churn, estimate = pred) %>% 
+  mutate(summary_tbl = map(conf_mat, summary)) %>% 
+  unnest(summary_tbl) %>% 
+  select(id, .metric, .estimate) %>% 
+  pivot_wider(names_from = id, values_from = .estimate)
+```
+
+Lets create a Confusion Matrix in order to see how our trained model performs on the test data.
+
+### Confusion Matrix
+
+```{r}
+df_svm %>% 
+  ungroup() %>% 
+  conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "heatmap") + theme_classic() + ggtitle("Confusion Matrix - Support Vector Machine")
+```
+
+* The confusion matrix shows that around ~80% of the data points were correctly predicted.
+* However around ~20% of predictions were wrong. 
+
+
+```{r}
+df_svm %>% 
+  ungroup() %>% conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "mosaic") + theme_classic() + ggtitle("Confusion Matrix - Support Vector Machine / Mosaic Plot")
+```
+
+* the same confusion matrix as above can be drawn with weighted tiles
+* we hereby see, that the svm model is more likely to predict non churn endangered clients right (no churn)
+* while the model tries to predict churned clients, it struggles and falsely classifies roughly 50% as churned 
+
+
+## Random Forest
+
+* in the following chapter we train and evaluate the random forest model 
+* the aim is to correctly classify the variable churn on the assessment data set
+
+
+### Train and Predict 
+
+```{r}
+model_randomforest <- rand_forest(mode  = "classification",
+                                  mtry  = 5,
+                                  trees = 3) %>% 
+  set_engine("randomForest") %>% 
+  translate()
+
+rf_fit <- df_cv_training_unnest %>% 
+  # preprocess dataset
+  mutate(recipe       = map(df_analysis, ~ prep(obj_02_recipe, training = .x)),
+         df_analysis  = map(recipe, juice),
+         df_assesment = map2(recipe, df_assesment, ~ bake(.x, new_data = .y))) %>%
+  # fit model
+  mutate(model_fit    = map(df_analysis, ~ fit(model_randomforest, churn ~ ., data = .x))) %>%
+# predict
+  mutate(model_pred   = map2(model_fit, df_assesment, ~ predict(.x, new_data = .y)))
+
+
+```
+
+
+### Evaluation 
+
+```{r rows.print = 50}
+df_rf <- rf_fit %>% select(id, df_assesment, model_pred) %>% 
+  mutate(df_compare = map2(df_assesment, model_pred, ~ tibble(churn = .x$churn,
+                                                              pred  = .y$.pred_class))) %>% 
+  select(id, df_compare) %>% 
+  unnest(df_compare) %>% 
+  group_by(id)
+
+df_rf %>% 
+  group_by(id) %>% 
+  conf_mat(truth = churn, estimate = pred) %>% 
+  mutate(summary_tbl = map(conf_mat, summary)) %>% 
+  unnest(summary_tbl) %>% 
+  select(id, .metric, .estimate) %>% 
+  pivot_wider(names_from = id, values_from = .estimate)
+```
+
+
+### Confusion Matrix
+
+```{r}
+df_rf %>% 
+  ungroup() %>% conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "heatmap") + theme_classic() + ggtitle("Confusion Matrix - Random Forest")
+```
+* The confusion matrix shows that around ~77% of the data points were correctly predicted.
+* However around ~23% of the predictions were wrong. This is hence a worse prediction score than with the SVM model. 
+
+```{r}
+df_rf %>% 
+  ungroup() %>% conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "mosaic") + ggtitle("Confusion Matrix - Random Forest / Mosaic")
+```
+
+* the same confusion matrix as above can be drawn with weighted tiles
+* as seen with the svm confusion matrix, the model struggles more with the prediction for a churned client
+* overall, the amount of flase predictions is higher
+
+
+## Logistic Regression
+
+* in the following chapter we train and evaluate the logistic regression model
+* the aim is to correctly classify the variable churn on the assessment data set
+
+
+### Train and Predict
+
+```{r message=FALSE, warning=FALSE}
+model_logistic <- logistic_reg(mode = "classification") %>% 
+  set_engine("glm") 
+
+log_fit <- df_cv_training_unnest %>% 
+  # preprocess dataset
+  mutate(recipe       = map(df_analysis, ~ prep(obj_02_recipe, training = .x)),
+         df_analysis  = map(recipe, juice),
+         df_assesment = map2(recipe, df_assesment, ~ bake(.x, new_data = .y))) %>%
+  # fit model
+  mutate(model_fit    = map(df_analysis, ~ fit(model_logistic, churn ~ ., data = .x))) %>%
+# predict
+  mutate(model_pred   = map2(model_fit, df_assesment, ~ predict(.x, new_data = .y)))
+
+```
+
+
+### Evaluation
+
+```{r rows.print = 50}
+df_log <- log_fit %>% select(id, df_assesment, model_pred) %>% 
+  mutate(df_compare = map2(df_assesment, model_pred, ~ tibble(churn = .x$churn,
+                                                              pred  = .y$.pred_class))) %>% 
+  select(id, df_compare) %>% 
+  unnest(df_compare) %>% 
+  group_by(id)
+
+df_log %>% 
+  group_by(id) %>% 
+  conf_mat(truth = churn, estimate = pred) %>% 
+  mutate(summary_tbl = map(conf_mat, summary)) %>% 
+  unnest(summary_tbl) %>% 
+  select(id, .metric, .estimate) %>% 
+  pivot_wider(names_from = id, values_from = .estimate)
+
+```
+
+
+### Confusion Matrix
+
+```{r}
+df_log %>% 
+  ungroup() %>% conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "heatmap") + theme_classic() + ggtitle("Confusion Matrix - Logistic Regression")
+```
+* The confusion matrix shows that around ~80% of the data points were correctly predicted.
+* However around ~20% of the predictions were wrong.
+* So far, the logistic regression model performed the best
+
+
+```{r}
+df_log %>% 
+  ungroup() %>% conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "mosaic") + ggtitle("Confusion Matrix - Logistic Regression / Mosaic")
+```
+
+* the classifications get better, the error distribution stays the same as seen above.
+
+
+## Artificial Neural Networks
+
+* in the following chapter we train and evaluate the classification through neural networks algorithm.
+
+
+### Train and Predict
+
+```{r message=FALSE, warning=FALSE}
+model_neural <- mlp(mode = "classification",
+                    hidden_units = 3,
+                    penalty = 0,
+                    activation = "linear",
+                    epochs = 6) %>%
+  set_engine("keras")
+
+
+neural_fit <- df_cv_training_unnest %>% 
+  # preprocess dataset
+  mutate(recipe       = map(df_analysis, ~ prep(obj_02_recipe, training = .x)),
+         df_analysis  = map(recipe, juice),
+         df_assesment = map2(recipe, df_assesment, ~ bake(.x, new_data = .y))) %>%
+  # fit model
+  mutate(model_fit    = map(df_analysis, ~ fit(model_neural, churn ~ ., data = .x))) %>%
+# predict
+  mutate(model_pred   = map2(model_fit, df_assesment, ~ predict(.x, new_data = .y)))
+```
+
+
+### Evaluation
+
+```{r}
+df_neural <- neural_fit %>% select(id, df_assesment, model_pred) %>% 
+  mutate(df_compare = map2(df_assesment, model_pred, ~ tibble(churn = .x$churn,
+                                                              pred  = .y$.pred_class))) %>% 
+  select(id, df_compare) %>% 
+  unnest(df_compare) %>% 
+  group_by(id)
+
+df_neural %>% 
+  group_by(id) %>% 
+  conf_mat(truth = churn, estimate = pred) %>% 
+  mutate(summary_tbl = map(conf_mat, summary)) %>% 
+  unnest(summary_tbl) %>% 
+  select(id, .metric, .estimate) %>% 
+  pivot_wider(names_from = id, values_from = .estimate)
+
+```
+
+
+### Confusion Matrix
+
+```{r}
+df_neural %>% 
+  ungroup() %>% conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "heatmap") + theme_classic() + ggtitle("Confusion Matrix - Neural Network")
+```
+
+* The confusion matrix shows that around ~80% of the data points were correctly predicted.
+* However around ~20% predictions were wrong.
+
+
+```{r}
+df_neural %>% 
+  ungroup() %>% conf_mat(truth = churn, estimate = pred) %>% autoplot(type = "mosaic") + theme_classic() + ggtitle("Confusion Matrix - Neural Network / Mosaic")
+```
+
+* same distribution as seen before
+* feature engineering is needed to get the model a better understanding for churned clients
+
+## Model Assessments
+
+Taking a short recap we see how the models performed so far.
+
+Wrong predictions made: 
+
+* ~20% artificial neural networks
+* ~20% logistic regression 
+* ~20% support vector machines 
+* ~23% random forest
+
+
+## Model Comparison
+
+* with the short recap from above in mind, we would like to compare the outcome numerically
+* with the following lines of code, we fit again each of the above models and let them compete against each other
+* after the fit, the column *predict* is being extracted to later visualize for a better understanding
+* we evaluate the model performance with the testing dataset
+
+```{r message=FALSE, warning=FALSE}
+
+recipe_classification <- 
+  recipe(churn ~ ., data = df_01_training) %>% 
+    step_naomit(all_predictors()) %>% 
+    step_log(total_charges) %>% 
+    step_log(monthly_charges) %>% 
+    step_dummy (all_nominal(),    -all_outcomes()) %>%
+    step_center(all_predictors(), -all_outcomes()) %>%
+    step_scale (all_predictors(), -all_outcomes()) %>% 
+  prep()
+
+df_cl_train_pp <- bake(recipe_classification, new_data = df_01_training)
+df_cl_test_pp  <- bake(recipe_classification, new_data = df_01_testing)
+
+
+fit_svm <- model_svm %>% fit(churn ~ ., data = df_cl_train_pp)
+fit_rf  <- model_randomforest %>% fit(churn ~ ., data = df_cl_train_pp)
+fit_log <- model_logistic %>% fit(churn ~ ., data = df_cl_train_pp)
+fit_nn  <- model_neural %>% fit(churn ~ ., data = df_cl_train_pp)
+
+
+df_cl_predict <- 
+  df_cl_test_pp %>% 
+  mutate("SVM_" = fit_svm %>% predict(new_data = df_cl_test_pp) %>% pull,
+         "RF__" = fit_rf  %>% predict(new_data = df_cl_test_pp) %>% pull,
+         "LOG_" = fit_log %>% predict(new_data = df_cl_test_pp) %>% pull,
+         "NNET" = fit_nn  %>% predict(new_data = df_cl_test_pp) %>% pull)
+
+
+
+```
+
+```{r rows.print = 50}
+df_eval <-  df_cl_predict %>% conf_mat(truth = churn, estimate = SVM_) %>% summary %>% mutate(model = "SVM_")  %>% 
+  bind_rows(df_cl_predict %>% conf_mat(truth = churn, estimate = RF__) %>% summary %>% mutate(model = "RF__")) %>% 
+  bind_rows(df_cl_predict %>% conf_mat(truth = churn, estimate = LOG_) %>% summary %>% mutate(model = "LOG_")) %>% 
+  bind_rows(df_cl_predict %>% conf_mat(truth = churn, estimate = NNET) %>% summary %>% mutate(model = "NNET"))
+
+df_eval %>% 
+  select(-.estimator) %>% 
+  pivot_wider(names_from = model, values_from = .estimate)
+```
+```{r fig.height=5, fig.width=7}
+vec_metrics <- c("accuracy", "kap", "precision", "recall") # "precision", "recall"
+
+df_eval %>% 
+  filter(.metric %in% vec_metrics) %>% 
+  ggplot() +
+  geom_point(aes(x = .metric, y = .estimate, col = model)) +
+  facet_wrap(.metric ~ ., scales = "free", ncol = 4) + 
+  theme(strip.background = element_blank(), strip.text.x = element_blank()) +
+  geom_label(aes(x = .metric, y = .estimate, label = model), nudge_x = 0.3, size = 2.5 ) +
+  theme_classic() +
+  theme(legend.position = "None")
+```
+
+* As we can see, Log and SVM performed have the best results in terms of accuracy and kappa 
+* Random Forest performed the worst; We expect the model to perform better with lesser pruning steps
+ 
+
+* one of the mostly used metrics is the accuracy score.
+
+$$Accuracy = \frac{\text{Number of correct predictions}}{\text{Total number of predictions made}}$$
+
+* There are many cases in which classification accuracy is not a good indicator for the model performance. One of these scenarios is when the class distribution is imbalanced (one class is more frequent than others). This is actually the case in our data set. So we do have a higher amount of non churned customers. This being taken in account, the predictions get more accurate. 
+
+$$Precision = \frac{\text{True Positive}}{\text{True Positive + False Positive}}$$
+
+# Conclusion
+
+All models have performed not so well in predicting the customers who actually churned in comparison to those who did not churn (NON-Churners). In a next step it would be advisable to do feature engineering increase the prediction-accuracy of the churned customers. Another approach would be to retrain the models with balanced datasets. A possible way to do this would be to downsample NON-Churners before training the models.
+
+All in all, there are only minor differences in the performance of the classification models. However the algorithms can be optimized by using hyperparameter-tuning and grid search.
+
+
+# Session Info
+```{r}
+sessionInfo()
+```
+
